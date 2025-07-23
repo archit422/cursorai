@@ -20,15 +20,32 @@
       {
         "command": "ai-explain.generate",
         "title": "AI: Generate Code"
+      },
+      {
+        "command": "ai-explain.autoFix",
+        "title": "AI: Auto-Fix All Errors"
       }
     ],
 
 
+    "keybindings": [
+      {
+        "command": "ai-explain.autoFix",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorTextFocus && resourceLangId == python"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
           "command": "ai-explain.explain",
           "when": "editorHasSelection",
+          "group": "1_modification"
+        },
+        {
+          "command": "ai-explain.autoFix",
+          "when": "resourceLangId == python",
           "group": "1_modification"
         }
       ]

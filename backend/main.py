@@ -1,3 +1,5 @@
+# backend/main.py
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 from typing import List
@@ -46,6 +48,7 @@ class Edit(BaseModel):
 class FixResponse(BaseModel):
     edits: List[Edit]
 
+
 # ———————— Prompt Template ————————
 
 SYSTEM_PROMPT = (
@@ -53,6 +56,7 @@ SYSTEM_PROMPT = (
     "Explain the following code snippet in plain English, using only concise paragraphs:\n\n"
     "```{language}\n{snippet}\n```"
 )
+
 
 # ———————— /explain Endpoint ————————
 
@@ -73,6 +77,7 @@ async def explain_snippet(req: ExplainRequest):
     except Exception as e:
         logging.exception("❌ Exception in /explain handler")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
+
 
 # ———————— /generate Endpoint ————————
 
@@ -98,6 +103,7 @@ async def generate_code(req: GenerateRequest):
         logging.exception("❌ Exception in /generate handler")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
+
 # ———————— /fix Endpoint ————————
 
 @app.post("/fix", response_model=FixResponse)
@@ -105,29 +111,41 @@ async def fix_code(req: FixRequest):
     if req.language.lower() != "python":
         raise HTTPException(status_code=400, detail="Currently only Python is supported")
 
-    # Build a strict JSON-patch prompt
     prompt = f"""
-You are a code‐fix assistant. INPUT: a Python snippet, an error message, and the exact range to correct.
-Return a JSON array of edits—and nothing else—in this form:
+You are a Python code-fix assistant. You will receive:
+1. A Python code snippet (with context lines)
+2. An error message
+3. The exact line and character range to fix
 
+Your task: Return a JSON array with ONE edit that fixes the error on the specified line.
+
+CRITICAL RULES:
+- Fix ONLY the line specified in the range (line {req.start_line})
+- Ensure all brackets, parentheses, and quotes are properly matched
+- The replacement must be valid Python syntax
+- Do not change indentation unless necessary for the fix
+- Return ONLY valid JSON - no markdown, no explanations
+
+Return format:
 [
   {{
-    "start_line": <int>,
-    "start_char": <int>,
-    "end_line":   <int>,
-    "end_char":   <int>,
-    "replacement":"<corrected code fragment>"
+    "start_line": {req.start_line},
+    "start_char": {req.start_char},
+    "end_line": {req.end_line},
+    "end_char": {req.end_char},
+    "replacement": "<corrected line content>"
   }}
 ]
 
 ERROR: {req.error}
 
-CODE SNIPPET:
+CODE SNIPPET (with context):
 {req.snippet}
 
 RANGE TO FIX:
-start_line={req.start_line}, start_char={req.start_char}
-end_line={req.end_line},     end_char={req.end_char}
+Line {req.start_line}, characters {req.start_char} to {req.end_char}
+
+Fix the syntax error on line {req.start_line} only. Ensure proper bracket/parentheses matching.
 """
     try:
         resp = client.chat.completions.create(
@@ -137,11 +155,13 @@ end_line={req.end_line},     end_char={req.end_char}
             max_tokens=500,
         )
         raw = resp.choices[0].message.content
-        # Extract and parse JSON
+
+        # Extract JSON array even if wrapped in markdown
         m = re.search(r"\[.*\]", raw, re.DOTALL)
         payload = m.group(0) if m else raw
         edits_list = json.loads(payload)
-        # Validate edits
+
+        # Validate each edit against the Edit model
         validated: List[Edit] = []
         for e in edits_list:
             try:
@@ -149,9 +169,11 @@ end_line={req.end_line},     end_char={req.end_char}
             except ValidationError:
                 logging.exception("Invalid edit schema from LLM")
                 raise HTTPException(status_code=500, detail="AI returned malformed edit data")
+
         return FixResponse(edits=validated)
+
     except RateLimitError:
-        raise HTTPException(429, detail="OpenAI quota exceeded—please check your billing plan.")
+        raise HTTPException(status_code=429, detail="OpenAI quota exceeded—please check your billing plan.")
     except Exception as e:
         logging.exception("❌ Exception in /fix handler")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")

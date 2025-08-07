@@ -1,4 +1,4 @@
-# AI Code Doctor
+# AI Code Editor
 
 An intelligent VS Code extension that automatically fixes Python syntax errors using AI-powered analysis.
 

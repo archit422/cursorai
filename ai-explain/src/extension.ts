@@ -4,11 +4,6 @@ import * as vscode from 'vscode';
 import axios from 'axios';
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log('🟢 AI Explain Snippet activated');
-
-  // ... your existing /explain and /generate command registrations ...
-
-  // ———————— NEW: Instant Auto-Fix Command ————————
   const autoFixCommand = vscode.commands.registerCommand('ai-explain.autoFix', async () => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -22,7 +17,6 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Get diagnostics for current file
     const diagnostics = vscode.languages.getDiagnostics(document.uri);
     
     if (diagnostics.length === 0) {
@@ -30,7 +24,6 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    // Show progress while fixing
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: "AI-fixing errors...",
@@ -46,13 +39,12 @@ export function activate(context: vscode.ExtensionContext) {
         replacement: string;
       }> = [];
 
-      // Phase 1: Collect all edits
+      // Collect all edits
       for (const diag of diagnostics) {
         progress.report({ message: `Analyzing error ${fixedCount + 1}/${diagnostics.length}` });
         
         try {
           const edit = await getFixForDiagnostic(document, diag);
-          console.log('DEBUG: Got edit for diagnostic:', { diag: diag.message, edit });
           
           if (edit && edit.length > 0) {
             allEdits.push(...edit);
@@ -63,15 +55,15 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      // Phase 2: Sort edits by position (reverse order so we apply from bottom to top)
+      // Sort edits by position (reverse order to apply from bottom to top)
       allEdits.sort((a, b) => {
         if (a.start_line !== b.start_line) {
-          return b.start_line - a.start_line; // Reverse order
+          return b.start_line - a.start_line;
         }
-        return b.start_char - a.start_char; // Reverse order
+        return b.start_char - a.start_char;
       });
 
-      // Phase 3: Remove overlapping edits (keep the first one for each overlapping range)
+      // Remove overlapping edits
       const nonOverlappingEdits: Array<{
         start_line: number;
         start_char: number;
@@ -82,7 +74,6 @@ export function activate(context: vscode.ExtensionContext) {
 
       for (const edit of allEdits) {
         const overlaps = nonOverlappingEdits.some(existing => {
-          // Check if ranges overlap
           const editStart = edit.start_line * 10000 + edit.start_char;
           const editEnd = edit.end_line * 10000 + edit.end_char;
           const existingStart = existing.start_line * 10000 + existing.start_char;
@@ -93,38 +84,25 @@ export function activate(context: vscode.ExtensionContext) {
         
         if (!overlaps) {
           nonOverlappingEdits.push(edit);
-        } else {
-          console.log('DEBUG: Skipping overlapping edit:', edit);
         }
       }
 
-      console.log('DEBUG: Applying', nonOverlappingEdits.length, 'non-overlapping edits');
-
-      // Phase 4: Apply the non-overlapping edits
+      // Apply the non-overlapping edits
       nonOverlappingEdits.forEach((e: any) => {
         const start = new vscode.Position(e.start_line, e.start_char);
         const end = new vscode.Position(e.end_line, e.end_char);
         const range = new vscode.Range(start, end);
         
-        console.log('DEBUG: Applying edit:', {
-          range: `${start.line}:${start.character} to ${end.line}:${end.character}`,
-          originalText: document.getText(range),
-          replacement: e.replacement
-        });
-        
         workspaceEdit.replace(document.uri, range, e.replacement);
       });
-
-      console.log('DEBUG: About to apply workspace edit with', workspaceEdit.size, 'changes');
       
       if (nonOverlappingEdits.length > 0) {
         const success = await vscode.workspace.applyEdit(workspaceEdit);
-        console.log('DEBUG: Workspace edit applied successfully:', success);
         
         if (success) {
-          vscode.window.showInformationMessage(`✅ Fixed ${nonOverlappingEdits.length} error(s) automatically`);
+          vscode.window.showInformationMessage(`Fixed ${nonOverlappingEdits.length} error(s) automatically`);
         } else {
-          vscode.window.showErrorMessage(`❌ Failed to apply ${nonOverlappingEdits.length} fix(es)`);
+          vscode.window.showErrorMessage(`Failed to apply ${nonOverlappingEdits.length} fix(es)`);
         }
       } else {
         vscode.window.showWarningMessage('No errors could be fixed automatically');
@@ -132,25 +110,30 @@ export function activate(context: vscode.ExtensionContext) {
     });
   });
 
-  // Helper function to get fix for a diagnostic
   async function getFixForDiagnostic(document: vscode.TextDocument, diag: vscode.Diagnostic) {
-    // Get more context: 3 lines before and after the error line
     const errorLine = diag.range.start.line;
-    const startLine = Math.max(0, errorLine - 3);
-    const endLine = Math.min(document.lineCount - 1, errorLine + 3);
+    const errMsg = diag.message;
+    
+    // Determine context size based on error type
+    let contextLines = 3;
+    
+    if (errMsg.toLowerCase().includes('indentationerror')) {
+      contextLines = 15;
+    } else if (errMsg.toLowerCase().includes('syntaxerror') && 
+               (errMsg.includes('def ') || errMsg.includes('class ') || errMsg.includes('if ') || 
+                errMsg.includes('for ') || errMsg.includes('while ') || errMsg.includes('try'))) {
+      contextLines = 8;
+    } else if (errMsg.toLowerCase().includes('nameerror')) {
+      contextLines = 10;
+    }
+    
+    const startLine = Math.max(0, errorLine - contextLines);
+    const endLine = Math.min(document.lineCount - 1, errorLine + contextLines);
     
     const contextRange = new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).text.length);
     const broken = document.getText(contextRange);
     
     const targetLine = document.lineAt(errorLine);
-    const errMsg = diag.message;
-
-    console.log('DEBUG: Sending fix request for:', {
-      errorLine,
-      errMsg,
-      snippet: broken,
-      targetLineText: targetLine.text
-    });
 
     const resp = await axios.post('http://localhost:8000/fix', {
       language: 'python',
@@ -162,11 +145,10 @@ export function activate(context: vscode.ExtensionContext) {
       end_char: targetLine.text.length
     });
 
-    console.log('DEBUG: Received edits from backend:', resp.data.edits);
     return resp.data.edits;
   }
 
-  // Code Action Provider for AI Fix (existing lightbulb behavior)
+  // Code Action Provider for lightbulb fixes
   const provider = vscode.languages.registerCodeActionsProvider(
     'python',
     {
@@ -178,7 +160,6 @@ export function activate(context: vscode.ExtensionContext) {
             continue;
           }
 
-          // Get more context: 3 lines before and after the error line
           const errorLine = diag.range.start.line;
           const startLine = Math.max(0, errorLine - 3);
           const endLine = Math.min(document.lineCount - 1, errorLine + 3);
@@ -200,7 +181,6 @@ export function activate(context: vscode.ExtensionContext) {
               end_char: targetLine.text.length
             });
 
-            // Apply returned JSON patches
             const edits: Array<{
               start_line:  number;
               start_char:  number;
@@ -221,12 +201,9 @@ export function activate(context: vscode.ExtensionContext) {
             fixes.push(action);
 
           } catch (e: any) {
-            // NEW: Log the entire error object
-            console.error('AI-fix raw error object:', e);
+            console.error('AI-fix error:', e);
 
-            // Existing code
             const respData = e.response?.data;
-            console.error('AI-fix full error response:', JSON.stringify(respData, null, 2));
 
             let message = e.message;
             if (respData?.detail) {

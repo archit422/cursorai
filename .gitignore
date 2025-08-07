@@ -1,16 +1,49 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.Python
 .env
+.venv/
+env/
+venv/
+
+# Test files and reports
+*_test.py
+test_*.py
+*_report.txt
+test_results/
 
 # Uvicorn / FastAPI
 *.log
+.pytest_cache/
 
 # Node/TypeScript
 node_modules/
 out/
 *.js.map
+dist/
+build/
 .vscode/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup

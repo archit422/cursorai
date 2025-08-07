@@ -75,7 +75,7 @@ async def explain_snippet(req: ExplainRequest):
         explanation = resp.choices[0].message.content.strip()
         return ExplainResponse(explanation=explanation)
     except Exception as e:
-        logging.exception("❌ Exception in /explain handler")
+        logging.exception("Exception in /explain handler")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
 
@@ -100,7 +100,7 @@ async def generate_code(req: GenerateRequest):
         code = resp.choices[0].message.content.strip()
         return GenerateResponse(code=code)
     except Exception as e:
-        logging.exception("❌ Exception in /generate handler")
+        logging.exception("Exception in /generate handler")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
 
@@ -111,42 +111,10 @@ async def fix_code(req: FixRequest):
     if req.language.lower() != "python":
         raise HTTPException(status_code=400, detail="Currently only Python is supported")
 
-    prompt = f"""
-You are a Python code-fix assistant. You will receive:
-1. A Python code snippet (with context lines)
-2. An error message
-3. The exact line and character range to fix
-
-Your task: Return a JSON array with ONE edit that fixes the error on the specified line.
-
-CRITICAL RULES:
-- Fix ONLY the line specified in the range (line {req.start_line})
-- Ensure all brackets, parentheses, and quotes are properly matched
-- The replacement must be valid Python syntax
-- Do not change indentation unless necessary for the fix
-- Return ONLY valid JSON - no markdown, no explanations
-
-Return format:
-[
-  {{
-    "start_line": {req.start_line},
-    "start_char": {req.start_char},
-    "end_line": {req.end_line},
-    "end_char": {req.end_char},
-    "replacement": "<corrected line content>"
-  }}
-]
-
-ERROR: {req.error}
-
-CODE SNIPPET (with context):
-{req.snippet}
-
-RANGE TO FIX:
-Line {req.start_line}, characters {req.start_char} to {req.end_char}
-
-Fix the syntax error on line {req.start_line} only. Ensure proper bracket/parentheses matching.
-"""
+    # Detect error type for specialized handling
+    error_type = detect_error_type(req.error)
+    prompt = generate_error_specific_prompt(error_type, req)
+    
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -175,5 +143,182 @@ Fix the syntax error on line {req.start_line} only. Ensure proper bracket/parent
     except RateLimitError:
         raise HTTPException(status_code=429, detail="OpenAI quota exceeded—please check your billing plan.")
     except Exception as e:
-        logging.exception("❌ Exception in /fix handler")
+        logging.exception("Exception in /fix handler")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
+
+def detect_error_type(error_message: str) -> str:
+    """Detect the type of error from the error message"""
+    error_msg = error_message.lower()
+    
+    if "indentationerror" in error_msg:
+        return "indentation"
+    elif "syntaxerror" in error_msg and (":" in error_msg or "colon" in error_msg):
+        return "missing_colon"
+    elif "syntaxerror" in error_msg and ("(" in error_msg or ")" in error_msg or "never closed" in error_msg):
+        return "missing_parenthesis"
+    elif "syntaxerror" in error_msg and ("[" in error_msg or "]" in error_msg):
+        return "missing_bracket"
+    elif "syntaxerror" in error_msg and ("{" in error_msg or "}" in error_msg):
+        return "missing_brace"
+    elif "syntaxerror" in error_msg and ("quote" in error_msg or "string" in error_msg):
+        return "quote_error"
+    elif "nameerror" in error_msg:
+        return "undefined_variable"
+    elif "syntaxerror" in error_msg and "," in error_msg:
+        return "missing_comma"
+    else:
+        return "general_syntax"
+
+def generate_error_specific_prompt(error_type: str, req) -> str:
+    """Generate specialized prompts based on error type"""
+    
+    base_format = f"""
+Return format (JSON only, no markdown):
+[
+  {{
+    "start_line": {req.start_line},
+    "start_char": {req.start_char},
+    "end_line": {req.end_line},
+    "end_char": {req.end_char},
+    "replacement": "<corrected line content>"
+  }}
+]
+
+ERROR: {req.error}
+CODE SNIPPET:
+{req.snippet}
+"""
+
+    if error_type == "indentation":
+        return f"""You are a Python indentation expert. Fix this IndentationError.
+
+PYTHON INDENTATION RULES:
+- Use exactly 4 spaces per indentation level
+- After a colon (:), the next line MUST be indented
+- All lines in the same block must have identical indentation
+- Never mix tabs and spaces
+
+EXAMPLES:
+Broken: def hello():\\nprint("hi")
+Fixed: def hello():\\n    print("hi")
+
+Broken: if x > 5:\\nreturn x
+Fixed: if x > 5:\\n    return x
+
+CRITICAL: Return the COMPLETE corrected line with proper indentation.
+Look at the surrounding code to understand the correct indentation level.
+{base_format}"""
+
+    elif error_type == "missing_colon":
+        return f"""You are a Python syntax expert. Fix this missing colon error.
+
+PYTHON COLON RULES:
+- Function definitions need colons: def func():
+- Control flow needs colons: if/for/while/try/except/else/elif/finally:
+- Class definitions need colons: class MyClass:
+
+EXAMPLES:
+Broken: if x > 5
+Fixed: if x > 5:
+
+Broken: def calculate()
+Fixed: def calculate():
+
+CRITICAL: Return the COMPLETE line with the colon added.
+{base_format}"""
+
+    elif error_type == "missing_parenthesis":
+        return f"""You are a Python syntax expert. Fix this missing parenthesis error.
+
+PARENTHESIS RULES:
+- Every opening ( needs a closing )
+- Function calls need both: func()
+- Conditions in if/while can use them: if (condition):
+
+EXAMPLES:
+Broken: print("hello"
+Fixed: print("hello")
+
+Broken: total = sum(numbers
+Fixed: total = sum(numbers)
+{base_format}"""
+
+    elif error_type == "missing_bracket":
+        return f"""You are a Python syntax expert. Fix this missing bracket error.
+
+BRACKET RULES:
+- Every opening [ needs a closing ]
+- Lists need both: [1, 2, 3]
+- Index access needs both: array[0]
+
+EXAMPLES:
+Broken: numbers = [1, 2, 3
+Fixed: numbers = [1, 2, 3]
+{base_format}"""
+
+    elif error_type == "missing_brace":
+        return f"""You are a Python syntax expert. Fix this missing brace error.
+
+BRACE RULES:
+- Every opening {{ needs a closing }}
+- Dictionaries need both: {{"key": "value"}}
+- Sets need both: {{1, 2, 3}}
+
+EXAMPLES:
+Broken: data = {{"name": "John"
+Fixed: data = {{"name": "John"}}
+{base_format}"""
+
+    elif error_type == "quote_error":
+        return f"""You are a Python syntax expert. Fix this quote/string error.
+
+QUOTE RULES:
+- Every opening quote needs a closing quote
+- Use single quotes: 'text' or double quotes: "text"
+- Escape quotes inside strings: "She said \\"hello\\""
+
+EXAMPLES:
+Broken: message = "Hello world
+Fixed: message = "Hello world"
+
+Broken: name = 'John's car'
+Fixed: name = "John's car"
+{base_format}"""
+
+    elif error_type == "undefined_variable":
+        return f"""You are a Python variable expert. Fix this undefined variable error.
+
+VARIABLE RULES:
+- Look at surrounding code for similar variable names
+- Suggest the most likely intended variable name
+- Consider function parameters and local variables
+
+EXAMPLES:
+If you see 'numbers' nearby but error says 'nums':
+Broken: total = sum(nums)
+Fixed: total = sum(numbers)
+{base_format}"""
+
+    elif error_type == "missing_comma":
+        return f"""You are a Python syntax expert. Fix this missing comma error.
+
+COMMA RULES:
+- Function parameters need commas: func(a, b, c)
+- List items need commas: [1, 2, 3]
+- Dictionary items need commas: {{"a": 1, "b": 2}}
+
+EXAMPLES:
+Broken: def func(a b, c):
+Fixed: def func(a, b, c):
+{base_format}"""
+
+    else:  # general_syntax
+        return f"""You are a Python syntax expert. Fix this syntax error.
+
+GENERAL RULES:
+- Ensure valid Python syntax
+- Match brackets, parentheses, and quotes
+- Add missing punctuation (colons, commas)
+- Maintain proper indentation
+
+{base_format}"""

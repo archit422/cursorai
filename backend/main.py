@@ -13,7 +13,6 @@ from openai import OpenAI, RateLimitError
 app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ———————— Request & Response Models ————————
 
 class ExplainRequest(BaseModel):
     language: str
@@ -49,16 +48,12 @@ class FixResponse(BaseModel):
     edits: List[Edit]
 
 
-# ———————— Prompt Template ————————
 
 SYSTEM_PROMPT = (
     "You are an expert {language} tutor. "
     "Explain the following code snippet in plain English, using only concise paragraphs:\n\n"
     "```{language}\n{snippet}\n```"
 )
-
-
-# ———————— /explain Endpoint ————————
 
 @app.post("/explain", response_model=ExplainResponse)
 async def explain_snippet(req: ExplainRequest):
@@ -79,7 +74,6 @@ async def explain_snippet(req: ExplainRequest):
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
 
-# ———————— /generate Endpoint ————————
 
 @app.post("/generate", response_model=GenerateResponse)
 async def generate_code(req: GenerateRequest):
@@ -104,14 +98,12 @@ async def generate_code(req: GenerateRequest):
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
 
-# ———————— /fix Endpoint ————————
 
 @app.post("/fix", response_model=FixResponse)
 async def fix_code(req: FixRequest):
     if req.language.lower() != "python":
         raise HTTPException(status_code=400, detail="Currently only Python is supported")
 
-    # Detect error type for specialized handling
     error_type = detect_error_type(req.error)
     prompt = generate_error_specific_prompt(error_type, req)
     
@@ -147,7 +139,6 @@ async def fix_code(req: FixRequest):
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
 
 def detect_error_type(error_message: str) -> str:
-    """Detect the type of error from the error message"""
     error_msg = error_message.lower()
     
     if "indentationerror" in error_msg:
@@ -170,7 +161,6 @@ def detect_error_type(error_message: str) -> str:
         return "general_syntax"
 
 def generate_error_specific_prompt(error_type: str, req) -> str:
-    """Generate specialized prompts based on error type"""
     
     base_format = f"""
 Return format (JSON only, no markdown):
